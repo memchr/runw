@@ -1,6 +1,5 @@
 import argparse
 import logging
-import sys
 import tomllib
 from .sandbox import run, AppConfig
 from .constants import XDG_CONFIG_HOME
@@ -71,6 +70,7 @@ def main():
             "cmd": (args.cmd or config["cmd"]) + args.args,
             "nvidia": get("nvidia", False),
             "kill": get("kill", False),
+            "proton": get("proton", None),
             "binds": default.get("binds", []) + config.get("binds", []),
         },
         shell=args.shell,

@@ -12,7 +12,6 @@ from typing import Callable, Literal, NotRequired, Self, TypedDict
 from .constants import (
     DBUS_PROXY_PATH,
     HOME,
-    PROTON_PATH,
     XDG_CACHE_HOME,
     XDG_CONFIG_HOME,
     XDG_DATA_HOME,
@@ -40,6 +39,7 @@ class AppConfig(TypedDict):
     share: NotRequired[list[str]]  # host namespaces to share
     sandbox_args: NotRequired[list[str]]
     env: NotRequired[dict[str, str]]
+    proton: NotRequired[str | Path]  # path to proton
 
 
 ar = Repr(indent=2, maxdict=200, maxstring=200, maxlist=200)
@@ -150,19 +150,20 @@ class Sandbox:
                 case "mangohud":
                     self.cmd.append("mangohud")
                 case "proton":
+                    if "proton" not in config or config["proton"] is None:
+                        raise RuntimeError("proton path not configured")
                     compat_data = XDG_DATA_HOME / "proton"
                     compat_data.mkdir(exist_ok=True, parents=True)
+                    proton_path = Path(config["proton"])
 
                     logging.debug(
-                        "use proton\n"
-                        + f"  path: {PROTON_PATH.parent}\n"
-                        + f"  prefix: {compat_data}"
+                        f"use proton\n  path: {proton_path}\n  prefix: {compat_data}"
                     )
                     self.setenv(
                         STEAM_COMPAT_CLIENT_INSTALL_PATH=str(XDG_DATA_HOME / "Steam"),
                         STEAM_COMPAT_DATA_PATH=str(compat_data),
-                    ).bind(compat_data, PROTON_PATH.parent)
-                    self.cmd.extend([str(PROTON_PATH), "run"])
+                    ).bind(compat_data, proton_path)
+                    self.cmd.extend([str(proton_path / "proton"), "run"])
                 case "wine":
                     logging.debug("use wine")
                     self.bind(HOME / ".wine")
