@@ -1,232 +1,146 @@
-# pyright: reportUninitializedInstanceVariable=false, reportIgnoreCommentWithoutRule=false, reportImplicitStringConcatenation=false
-
-import logging
-import os
-import subprocess
 from glob import glob
+import logging
 from os.path import expandvars
 from pathlib import Path
-from reprlib import Repr
-from typing import Callable, Literal, NotRequired, Self, TypedDict
+from dataclasses import dataclass, field
+import os
+from typing import Self
 
-from .constants import (
-    DBUS_PROXY_PATH,
-    HOME,
-    XDG_CACHE_HOME,
-    XDG_CONFIG_HOME,
-    XDG_DATA_HOME,
-    XDG_RUNTIME_DIR,
-)
-
-MountMode = Literal["dev", "ro", "rw"]
+# pyright: reportCallInDefaultInitializer=false, reportExplicitAny=false
+from runw.common import GlobBind, Bind, XDG_RUNTIME_DIR, DBUS_PROXY_DIR, HOME, openfd
 
 
-class BindMount(TypedDict):
-    src: str | Path
-    dest: NotRequired[str | Path]
-    mode: NotRequired[str]
+@dataclass(kw_only=True)
+class Bwrap:
+    use: list[str] = field(default_factory=list)
 
+    cmd: list[str] = field(default_factory=list)
+    bind: list[str | Bind | GlobBind] = field(default_factory=list)
+    # device binds
+    dev: list[str | Bind | GlobBind] = field(default_factory=list)
+    # symlinks
+    link: list[tuple[str, str]] = field(default_factory=list)
+    # mkdir
+    dir: list[str] = field(default_factory=list)
+    bus: list[str] = field(default_factory=list)
+    system_bus: list[str] = field(default_factory=list)
+    env: dict[str, str] = field(default_factory=dict)
+    share: set[str] = field(default_factory=set)
 
-class AppConfig(TypedDict):
-    cmd: list[str]  # app command
-    launcher: NotRequired[list[str]]  # launchers
-    home: NotRequired[str]  # where to store home dir data
-    binds: list[BindMount | str | Path]  # bind mounts
-    nvidia: bool  # enable nvidia GPU, default true
-    kill: bool  # kill sandbox processes when bwrap exits, default true
-    bus: NotRequired[list[str]]  # dbus proxy args
-    system_bus: NotRequired[list[str]]  # dbus proxy args
-    share: NotRequired[list[str]]  # host namespaces to share
-    sandbox_args: NotRequired[list[str]]
-    env: NotRequired[dict[str, str]]
-    proton: NotRequired[str | Path]  # path to proton
+    # override
+    kill: bool = False
+    home: str | None = None
+    chdir: str | None = None
 
+    _bwrap_argv: list[str] = field(init=False, default_factory=list)
 
-ar = Repr(indent=2, maxdict=200, maxstring=200, maxlist=200)
+    def __post_init__(self):
+        # allow use string as cmd
+        self._bwrap_argv = ["--proc", "/proc", "--dev", "/dev"]
+        if isinstance(self.cmd, str):
+            self.cmd = [self.cmd]
+        if isinstance(self.share, list):
+            self.share = set(self.share)
 
+    def merge(self, other: Self):
+        # merge
+        self.cmd.extend(other.cmd)
+        self.bind.extend(other.bind)
+        self.dev.extend(other.dev)
+        self.link.extend(other.link)
+        self.dir.extend(other.dir)
+        self.bus.extend(other.bus)
+        self.system_bus.extend(other.system_bus)
+        self.env.update(other.env)
+        self.share = self.share.union(other.share)
+        # override
+        self.kill = other.kill
+        self.home = other.home
+        self.chdir = other.chdir
+        return self
 
-def run(config: AppConfig, shell=False):
-    sandbox = Sandbox(config)
-    if shell:
-        logging.debug("runing shell")
-        sandbox.exec([os.getenv("SHELL", "bash")])
-    else:
-        sandbox.exec()
+    def resolve(self, presets: dict[str, Self]):
+        resolved = Bwrap().merge(presets["global"])
+        if not self.use:
+            return resolved.merge(self)
 
+        # DFS postorder DAG
+        stack: list[str] = list(reversed(self.use))
+        visited: set[str] = set()
+        processed: set[str] = set()
+        while stack:
+            node = stack[-1]
+            if node in visited:
+                stack.pop()
+                continue
+            preset = presets[node]
+            if node in processed:
+                # process it here
+                logging.debug(f"using preset: {node}")
+                resolved.merge(preset)
+                visited.add(stack.pop())
+            else:
+                stack.extend(reversed(preset.use))
+                processed.add(node)
+        return resolved.merge(self)
 
-def openfd(content: bytes) -> int:
-    r, w = os.pipe()
-    os.set_inheritable(r, True)
-    os.write(w, content)
-    return r
+    def exec(self):
+        # mount home directory
+        if self.home:
+            self.home = expandvars(self.home)
+            logging.debug(f"home: {self.home}")
+            os.makedirs(self.home, exist_ok=True)
+            self._bwrap_argv.extend(["--bind", self.home, str(HOME)])
 
-
-class Sandbox:
-    def __init__(self, config: AppConfig | None = None) -> None:
-        self._options: list[str] = []
-        self._hooks: list[Callable[[], None]] = []
-        if config is None:
-            return
-        logging.debug("config:\n %s", ar.repr(config))
-        (
-            self.share(*config.get("share", []))
-            .bind(
-                "/usr",
-                "/etc",
-                "/opt",
-                "/var/lib/alsa/",
-                "/run/systemd/resolve/",
-                "/tmp/.X11-unix",
-                "/tmp/.ICE-unix",
-            )
-            .dir(
-                "/var/empty",
-                "/tmp",
-            )
-            .link(
-                ("/usr/bin", "/bin"),
-                ("/usr/bin", "/sbin"),
-                ("/usr/lib", "/lib"),
-                ("/usr/lib64", "/lib64"),
-                ("/run", "/var/run"),
-            )
-            .options("--proc", "/proc", "--dev", "/dev")
-            .bind(
-                "/dev/dri",
-                "/dev/input",
-                "/dev/hugepages",
-                *glob("/dev/nvidia*"),
-                "/dev/snd",
-                "/dev/fuse",
-                "/sys/block/",
-                "/sys/bus/",
-                "/sys/class/",
-                "/sys/dev/",
-                "/sys/devices/",
-                "/sys/module/",
-                default_mode="dev",
-            )
-            .home(config.get("home"))
-            .bind(
-                # graphics
-                *glob(str(XDG_RUNTIME_DIR / "wayland*")),
-                # sound
-                *glob(str(XDG_RUNTIME_DIR / "pulse*")),
-                *glob(str(XDG_RUNTIME_DIR / "pipewire*")),
-                # cache
-                XDG_CACHE_HOME / "mesa_shader_cache",
-                XDG_CACHE_HOME / "radv_builtin_shaders64",
-                XDG_CACHE_HOME / "nv",
-                XDG_CACHE_HOME / "nvidia",
-                XDG_CACHE_HOME / "radv_builtin_shaders",
-                XDG_CACHE_HOME / "mesa_shader_cache_db",
-                # other
-                XDG_CONFIG_HOME / "MangoHud",
-                {"src": XDG_CONFIG_HOME / "user-dirs.dirs", "mode": "ro"},
-                {"src": XDG_CONFIG_HOME / "user-dirs.locale", "mode": "ro"},
-            )
+        # unshare namespaces
+        self._bwrap_argv.extend(
+            [self._unshares[ns] for ns in set(self._unshares.keys()) - set(self.share)]
         )
 
-        if config["kill"]:
-            logging.debug("Ensures child process dies when bwrap exits")
-            self.options("--die-with-parent")
+        # kill process group when sandbox quits
+        if self.kill:
+            self._bwrap_argv.append("--die-with-parent")
 
-        if config["nvidia"]:
-            logging.debug("force nvidia gpu")
-            self.setenv(
-                __NV_PRIME_RENDER_OFFLOAD="1",
-                __GLX_VENDOR_LIBRARY_NAME="nvidia",
-                __VK_LAYER_NV_optimus="NVIDIA_only",
-                VK_DRIVER_FILES="/usr/share/vulkan/icd.d/nvidia_icd.json",
-            )
+        # update environment
+        os.environ.update({k: expandvars(e) for k, e in self.env.items()})
 
-        if "bus" in config or "system_bus" in config:
-            self.dbus_proxy(config.get("bus", []), config.get("system_bus", []))
+        # mounts
+        self._bind(self.dev, "dev")
+        self._bind(self.bind, "rw")
 
-        # setup launchers and command
-        self.cmd: list[str] = []
-        for launcher in config.get("launcher", []):
-            match launcher:
-                case "mangohud":
-                    self.cmd.append("mangohud")
-                case "proton":
-                    if "proton" not in config or config["proton"] is None:
-                        raise RuntimeError("proton path not configured")
-                    compat_data = XDG_DATA_HOME / "proton"
-                    compat_data.mkdir(exist_ok=True, parents=True)
-                    proton_path = Path(config["proton"])
+        # symlinks
+        for link in self.link:
+            logging.debug(f"symlink: {link[0]} -> {link[1]}")
+            self._bwrap_argv.extend(["--symlink", link[0], link[1]])
 
-                    logging.debug(
-                        f"use proton\n  path: {proton_path}\n  prefix: {compat_data}"
-                    )
-                    self.setenv(
-                        STEAM_COMPAT_CLIENT_INSTALL_PATH=str(XDG_DATA_HOME / "Steam"),
-                        STEAM_COMPAT_DATA_PATH=str(compat_data),
-                    ).bind(compat_data, proton_path)
-                    self.cmd.extend([str(proton_path / "proton"), "run"])
-                case "wine":
-                    logging.debug("use wine")
-                    self.bind(HOME / ".wine")
-                    self.cmd.append("wine")
-                case _:
-                    pass
-        self.cmd.extend(expandvars(c) for c in config["cmd"])
-        logging.debug("command: %s", self.cmd)
+        # mkdir
+        for dir in self.dir:
+            logging.debug(f"mkdir: {dir}")
+            self._bwrap_argv.extend(["--dir", dir])
 
-        self.bind(*config["binds"]).setenv(**config.get("env", {}))
+        # dbus
+        if self.bus or self.system_bus:
+            self._start_dbus_proxy()
 
-    def exec(self, cmd: list[str] | None = None):
-        for hook in self._hooks:
-            hook()
-        logging.debug("bwrap args %s", ar.repr(self._options))
+        # chdir
+        if self.chdir:
+            self._bwrap_argv.extend(["--chdir", expandvars(self.chdir)])
+
+        # command
+        cmd = [expandvars(i) for i in self.cmd]
+        logging.debug(f"command: {cmd}")
+        logging.debug(f"bwrap args: {self._bwrap_argv}")
+
         os.execvp(
             "bwrap",
             [
                 "bwrap",
                 "--args",
-                str(openfd("\0".join(self._options).encode())),
-                *(cmd or self.cmd),
+                str(openfd("\0".join(self._bwrap_argv).encode())),
+                "--",
+                *cmd,
             ],
         )
-
-    _BIND_VERBS = {"ro": "--ro-bind-try", "rw": "--bind-try", "dev": "--dev-bind-try"}
-
-    def bind(
-        self, *mounts: str | Path | BindMount, default_mode: MountMode = "rw"
-    ) -> Self:
-        for mount in mounts:
-            if isinstance(mount, dict):
-                src = expandvars(str(mount["src"]))
-                dest = expandvars(str(mount.get("dest", src)))
-                mode = self._BIND_VERBS[mount.get("mode", default_mode)]
-            else:
-                src = dest = expandvars(str(mount))
-                mode = self._BIND_VERBS[default_mode]
-            self._options.extend([mode, src, dest])
-        return self
-
-    def dir(self, *paths: str) -> Self:
-        self._options.extend([arg for path in paths for arg in ("--dir", path)])
-        return self
-
-    def link(self, *links: tuple[str, str]) -> Self:
-        self._options.extend([arg for link in links for arg in ("--symlink", *link)])
-        return self
-
-    def setenv(self, **environ: str) -> Self:
-        self._options.extend(
-            [arg for k, v in environ.items() for arg in ("--setenv", k, str(v))]
-        )
-        return self
-
-    def home(self, src: str | Path | None) -> Self:
-        if src is not None:
-            self._options.extend(["--bind", str(expandvars(src)), str(HOME)])
-        return self
-
-    def options(self, *options: str) -> Self:
-        self._options.extend(options)
-        return self
 
     _unshares = {
         "user": "--unshare-user-try",
@@ -236,50 +150,61 @@ class Sandbox:
         "cgroup": "--unshare-cgroup-try",
         "net": "--unshare-net",
     }
+    _bind_verbs = {"ro": "--ro-bind-try", "rw": "--bind-try", "dev": "--dev-bind-try"}
 
-    def share(self, *namespaces: str) -> Self:
-        self._options.extend(
-            [self._unshares[ns] for ns in set(self._unshares.keys()) - set(namespaces)]
-        )
-        return self
+    def _bind(self, binds: list[str | Bind | GlobBind], default_mode="rw"):
+        default_verb = self._bind_verbs[default_mode]
+        for bind in binds:
+            if isinstance(bind, str):
+                path = expandvars(bind)
+                logging.debug(f"{default_mode} mount: {path}")
+                self._bwrap_argv.extend([default_verb, path, path])
+                continue
 
-    def dbus_proxy(self, session_bus_filter: list[str], system_bus_filter: list[str]):
-        DBUS_PROXY_PATH.mkdir(exist_ok=True, parents=True)
+            mode = bind.get("mode", default_mode)
+            verb = self._bind_verbs[mode]
+            if "glob" in bind:
+                for path in glob(expandvars(bind["glob"])):
+                    logging.debug(f"{mode} mount: {path}")
+                    self._bwrap_argv.extend([verb, path, path])
+            else:
+                src = expandvars(bind["src"])
+                dest = expandvars(bind["dest"]) if "dest" in bind else src
+                logging.debug(f"{mode} mount: {src} -> {dest}")
+                if bind.get("create", False):
+                    os.makedirs(src, exist_ok=True)
+                    logging.debug(f"host mkdir {src}")
+                self._bwrap_argv.extend([verb, src, dest])
+
+    def _start_dbus_proxy(self):
+        DBUS_PROXY_DIR.mkdir(exist_ok=True, parents=True)
 
         session_bus = XDG_RUNTIME_DIR / "bus"
-        session_bus_proxy = DBUS_PROXY_PATH / str(os.getpid())
-
         system_bus = Path("/run/dbus/system_bus_socket")
-        system_bus_proxy = DBUS_PROXY_PATH / f"{os.getpid()}-system"
-        logging.debug(
-            f"enabled dbus proxy\n  session bus: {session_bus_proxy}\n  system bus:  {system_bus_proxy}"
-        )
+        session_bus_proxy = DBUS_PROXY_DIR / str(os.getpid())
+        system_bus_proxy = DBUS_PROXY_DIR / f"{os.getpid()}-system"
 
-        fd_bwrap, fd_dbus_proxy = os.pipe()
+        fd_bwrap, fd_dbus_proxy = os.pipe2(0)
+        if os.fork() == 0:
+            os.close(fd_bwrap)
+            os.execlp(
+                "xdg-dbus-proxy",
+                "xdg-dbus-proxy",
+                f"--fd={fd_dbus_proxy}",
+                # session bus
+                os.getenv("DBUS_SESSION_BUS_ADDRESS", f"unix:path={session_bus}"),
+                str(session_bus_proxy),
+                "--filter", *self.bus,
+                # system bus
+                f"unix:path={system_bus}",
+                str(system_bus_proxy),
+                "--filter", *self.system_bus,
+            )  # fmt: skip
 
-        self.bind(
-            {"src": session_bus_proxy, "dest": session_bus},
-            {"src": system_bus_proxy, "dest": system_bus},
-        ).options("--sync-fd", str(fd_bwrap))
-        args = [
-            "/usr/bin/xdg-dbus-proxy",
-            f"--fd={fd_dbus_proxy}",
-            # session bus
-            os.getenv("DBUS_SESSION_BUS_ADDRESS", f"unix:path={session_bus}"),
-            str(session_bus_proxy),
-            "--filter",
-            *session_bus_filter,
-            # system bus
-            f"unix:path={system_bus}",
-            str(system_bus_proxy),
-            "--filter",
-            *system_bus_filter,
-        ]
-
-        def run():
-            subprocess.Popen(args, pass_fds=[fd_dbus_proxy])
-            os.read(fd_bwrap, 1)
-            logging.debug("xdg-dbus-proxy is ready")
-            os.set_inheritable(fd_bwrap, True)
-
-        self._hooks.append(run)
+        assert os.read(fd_bwrap, 1) == b"x"
+        self._bwrap_argv.extend([
+            "--bind", str(session_bus_proxy), str(session_bus),
+            "--bind", str(system_bus_proxy), str(system_bus),
+            "--sync-fd", str(fd_bwrap)
+        ])  # fmt: skip
+        logging.debug("xdg-dbus-proxy is ready")

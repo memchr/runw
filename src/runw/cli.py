@@ -1,26 +1,26 @@
 import argparse
 import logging
-import tomllib
-from .sandbox import run, AppConfig
-from .constants import XDG_CONFIG_HOME
+import os
 
-
-# pyright: reportUninitializedInstanceVariable=false, reportIgnoreCommentWithoutRule=false, reportImplicitStringConcatenation=false
-
-CONFIG_PATH = XDG_CONFIG_HOME / "runw.toml"
+from runw.config import load_configs, load_presets
+# pyright: reportUninitializedInstanceVariable=false
 
 
 class Arguments(argparse.Namespace):
     verbose: bool
     shell: bool
     cmd: list[str] | None
-    app: str | None
+    container: str | None
     args: list[str]
     list: bool
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Run preconfigured bubblewrap containers",
+        allow_abbrev=False,
+        usage="runw [options] container [args]\n       runw -l",
+    )
     parser.add_argument(
         "-s", "--shell", action="store_true", help="Run a temporary shell"
     )
@@ -29,49 +29,33 @@ def main():
     )
     parser.add_argument("-c", "--cmd", type=str, help="override app command", nargs=1)
     parser.add_argument("-l", "--list", action="store_true", help="List all apps")
-    parser.add_argument("app", nargs="?", help="name of the app")
-    parser.add_argument("args", nargs=argparse.REMAINDER)
+    parser.add_argument("container", nargs="?")
+    parser.add_argument("args", nargs=argparse.REMAINDER, help="additional arguments")
 
     args = parser.parse_args(namespace=Arguments())
 
     if args.verbose:
-        logging.basicConfig(level=logging.DEBUG)
+        log_level = logging.DEBUG
     else:
-        logging.basicConfig(level=logging.INFO)
+        log_level = logging.WARNING
+    logging.basicConfig(level=log_level, format="[runw %(levelname)s] %(message)s")
 
-    with (CONFIG_PATH).open("rb") as f:
-        configs: dict[str, AppConfig] = tomllib.load(f)
+    presets = load_presets()
+    configs = load_configs()
 
     if args.list:
-        try:
-            del configs["default"]
-        except KeyError:
-            pass
-        for key in configs:
-            print(key)
+        for k in configs:
+            print(k)
         return 0
 
-    if args.app is None:
-        parser.error("name of the app is required")
+    if args.container is None:
+        parser.error("the following arguments are required: container")
+    try:
+        config = configs[args.container.lower()]
+    except KeyError:
+        parser.error(f"{args.container} not found")
 
-    app: str = args.app.lower()
-    if app not in configs:
-        parser.error(f"{app} not found")
-
-    default = configs.get("default", {})
-    config = configs[app]
-
-    def get(x: str, y):
-        return config.get(x, default.get(x, y))  # pyright: ignore
-
-    run(
-        {
-            **config,
-            "cmd": (args.cmd or config["cmd"]) + args.args,
-            "nvidia": get("nvidia", False),
-            "kill": get("kill", False),
-            "proton": get("proton", None),
-            "binds": default.get("binds", []) + config.get("binds", []),
-        },
-        shell=args.shell,
-    )
+    resolved = config.resolve(presets)
+    if args.shell:
+        resolved.cmd = [os.getenv("SHELL", "bash")]
+    resolved.exec()
