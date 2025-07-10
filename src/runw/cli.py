@@ -56,6 +56,8 @@ def main():
         parser.error(f"{args.container} not found")
 
     resolved = config.resolve(presets)
+    if args.args:
+        resolved.cmd.extend(args.args)
     if args.shell:
         resolved.cmd = [os.getenv("SHELL", "bash")]
     resolved.exec()
