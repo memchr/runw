@@ -3,6 +3,7 @@ import logging
 import os
 
 from runw.config import load_configs, load_presets
+from runw.sandbox import Bwrap
 # pyright: reportUninitializedInstanceVariable=false
 
 
@@ -51,13 +52,15 @@ def main():
     if args.container is None:
         parser.error("the following arguments are required: container")
     try:
-        config = configs[args.container.lower()]
+        sandbox = Bwrap.from_dict(configs[args.container.lower()])
     except KeyError:
         parser.error(f"{args.container} not found")
 
-    resolved = config.resolve(presets)
+    sandbox = sandbox.resolve(presets)
+    if args.cmd:
+        sandbox.cmd = args.cmd
     if args.args:
-        resolved.cmd.extend(args.args)
+        sandbox.cmd.extend(args.args)
     if args.shell:
-        resolved.cmd = [os.getenv("SHELL", "bash")]
-    resolved.exec()
+        sandbox.cmd = [os.getenv("SHELL", "bash")]
+    sandbox.exec()

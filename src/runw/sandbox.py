@@ -4,7 +4,7 @@ from os.path import expandvars
 from pathlib import Path
 from dataclasses import dataclass, field
 import os
-from typing import Self
+from typing import Any, Self
 
 # pyright: reportCallInDefaultInitializer=false, reportExplicitAny=false
 from runw.common import Bind, XDG_RUNTIME_DIR, DBUS_PROXY_DIR, HOME, openfd
@@ -143,6 +143,10 @@ class Bwrap:
                 *cmd,
             ],
         )
+
+    @classmethod
+    def from_dict(cls, config: dict[str, Any]):
+        return cls(**{k: v for k, v in config.items() if k in cls.__dataclass_fields__})
 
     _unshares = {
         "user": "--unshare-user-try",
