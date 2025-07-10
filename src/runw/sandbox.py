@@ -7,7 +7,7 @@ import os
 from typing import Self
 
 # pyright: reportCallInDefaultInitializer=false, reportExplicitAny=false
-from runw.common import GlobBind, Bind, XDG_RUNTIME_DIR, DBUS_PROXY_DIR, HOME, openfd
+from runw.common import Bind, XDG_RUNTIME_DIR, DBUS_PROXY_DIR, HOME, openfd
 
 
 @dataclass(kw_only=True)
@@ -15,9 +15,9 @@ class Bwrap:
     use: list[str] = field(default_factory=list)
 
     cmd: list[str] = field(default_factory=list)
-    bind: list[str | Bind | GlobBind] = field(default_factory=list)
+    bind: list[str | Bind] = field(default_factory=list)
     # device binds
-    dev: list[str | Bind | GlobBind] = field(default_factory=list)
+    dev: list[str | Bind] = field(default_factory=list)
     # symlinks
     link: list[tuple[str, str]] = field(default_factory=list)
     # mkdir
@@ -154,7 +154,7 @@ class Bwrap:
     }
     _bind_verbs = {"ro": "--ro-bind-try", "rw": "--bind-try", "dev": "--dev-bind-try"}
 
-    def _bind(self, binds: list[str | Bind | GlobBind], default_mode="rw"):
+    def _bind(self, binds: list[str | Bind], default_mode="rw"):
         default_verb = self._bind_verbs[default_mode]
         for bind in binds:
             if isinstance(bind, str):
@@ -169,7 +169,10 @@ class Bwrap:
                 for path in glob(expandvars(bind["glob"])):
                     logging.debug(f"{mode} mount: {path}")
                     self._bwrap_argv.extend([verb, path, path])
-            else:
+            elif "tmpfs" in bind:
+                path = expandvars(bind["tmpfs"])
+                self._bwrap_argv.extend(["--tmpfs", path])
+            elif "src" in bind:
                 src = expandvars(bind["src"])
                 dest = expandvars(bind["dest"]) if "dest" in bind else src
                 logging.debug(f"{mode} mount: {src} -> {dest}")

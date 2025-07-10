@@ -14,15 +14,12 @@ AccessMode = Literal["ro", "rw", "dev"]
 
 
 class Bind(TypedDict):
-    src: str
+    src: NotRequired[str]
     dest: NotRequired[str]
     mode: NotRequired[AccessMode]
     create: NotRequired[bool]
-
-
-class GlobBind(TypedDict):
-    glob: str
-    mode: NotRequired[AccessMode]
+    glob: NotRequired[str]
+    tmpfs: NotRequired[str]
 
 
 def openfd(content: bytes) -> int:

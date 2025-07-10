@@ -4,7 +4,6 @@ from .common import (
     XDG_RUNTIME_DIR,
     XDG_CONFIG_HOME,
     Bind,
-    GlobBind,
     openfd,
 )
 
@@ -18,7 +17,6 @@ __all__ = [
     "openfd",
     "Bwrap",
     "Bind",
-    "GlobBind",
     "load_presets",
     "load_configs",
 ]
