@@ -28,7 +28,7 @@ class Bwrap:
     share: set[str] = field(default_factory=set)
 
     # override
-    kill: bool = False
+    kill: bool | None = False
     home: str | None = None
     chdir: str | None = None
 
@@ -54,9 +54,10 @@ class Bwrap:
         self.env.update(other.env)
         self.share = self.share.union(other.share)
         # override
-        self.kill = other.kill
-        self.home = other.home
-        self.chdir = other.chdir
+        if other.kill is not None:
+            self.kill = other.kill
+        self.home = other.home or self.home
+        self.chdir = other.chdir or self.chdir
         return self
 
     def resolve(self, presets: dict[str, Self]):
@@ -99,6 +100,7 @@ class Bwrap:
 
         # kill process group when sandbox quits
         if self.kill:
+            logging.debug("die with parent")
             self._bwrap_argv.append("--die-with-parent")
 
         # update environment
