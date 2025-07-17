@@ -25,6 +25,7 @@ class Bwrap:
     bus: list[str] = field(default_factory=list)
     system_bus: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
+    unsetenv: list[str] = field(default_factory=list)
     share: set[str] = field(default_factory=set)
 
     # override
@@ -52,6 +53,7 @@ class Bwrap:
         self.bus.extend(other.bus)
         self.system_bus.extend(other.system_bus)
         self.env.update(other.env)
+        self.unsetenv.extend(other.unsetenv)
         self.share = self.share.union(other.share)
         # override
         if other.kill is not None:
@@ -105,6 +107,8 @@ class Bwrap:
 
         # update environment
         os.environ.update({k: expandvars(e) for k, e in self.env.items()})
+        for e in self.unsetenv:
+            self._bwrap_argv.extend(["--unsetenv", e])
 
         # mounts
         self._bind(self.dev, "dev")
