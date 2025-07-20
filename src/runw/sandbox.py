@@ -29,7 +29,7 @@ class Bwrap:
     share: set[str] = field(default_factory=set)
 
     # override
-    kill: bool | None = False
+    kill: bool | None = None
     home: str | None = None
     chdir: str | None = None
 
