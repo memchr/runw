@@ -15,6 +15,7 @@ class RunArgumentParser(argparse.ArgumentParser):
         cmd: list[str] | None
         container: str | None
         args: list[str]
+        list_plain: bool
         list: bool
 
     def __init__(self):
@@ -30,7 +31,14 @@ class RunArgumentParser(argparse.ArgumentParser):
             "-v", "--verbose", action="store_true", help="Enable debug logging"
         )
         self.add_argument("-c", "--cmd", type=str, help="override app command", nargs=1)
-        self.add_argument("-l", "--list", action="store_true", help="List all apps")
+        self.add_argument(
+            "-l", "--list", action="store_true", help="List all configured containers"
+        )
+        self.add_argument(
+            "--list-plain",
+            action="store_true",
+            help="List all configured containers without description",
+        )
         self.add_argument("container", nargs="?")
         self.add_argument("args", nargs=argparse.REMAINDER, help="additional arguments")
 
@@ -69,6 +77,11 @@ def runw():
 
     presets = load_presets()
     configs = load_configs()
+
+    if args.list_plain:
+        for name in configs:
+            print(name)
+        return 0
 
     if args.list:
         for name, config in configs.items():
