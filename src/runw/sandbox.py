@@ -32,6 +32,7 @@ class Bwrap:
     kill: bool | None = None
     home: str | None = None
     chdir: str | None = None
+    desc: str | None = None
 
     _bwrap_argv: list[str] = field(init=False, default_factory=list)
 
@@ -60,6 +61,7 @@ class Bwrap:
             self.kill = other.kill
         self.home = other.home or self.home
         self.chdir = other.chdir or self.chdir
+        self.desc = other.desc
         return self
 
     def resolve(self, presets: dict[str, Self]):

@@ -71,8 +71,8 @@ def runw():
     configs = load_configs()
 
     if args.list:
-        for k in configs:
-            print(k)
+        for name, config in configs.items():
+            print(f"\033[1m{name:<30}\033[0m{config.get('desc', '')}")
         return 0
 
     if args.container is None:
