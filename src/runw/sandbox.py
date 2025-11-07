@@ -34,6 +34,7 @@ class Bwrap:
     chdir: str | None = None
     desc: str | None = None
     rootfs: str | None = None
+    no_default: bool | None = None
 
     def __post_init__(self):
         # allow use string as cmd
@@ -61,11 +62,15 @@ class Bwrap:
         self.chdir = other.chdir or self.chdir
         self.desc = other.desc
         self.rootfs = other.rootfs
+        if other.no_default is not None:
+            self.no_default = other.no_default
         return self
 
     def resolve(self, presets: dict[str, Self]):
         """Resolve and return a merged configuration by applying presets"""
-        resolved = Bwrap().merge(presets["global"])
+        resolved = Bwrap()
+        if not self.no_default:
+            resolved.merge(presets["default"])
         if not self.use:
             return resolved.merge(self)
 
