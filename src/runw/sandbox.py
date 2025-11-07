@@ -33,12 +33,16 @@ class Bwrap:
     home: str | None = None
     chdir: str | None = None
     desc: str | None = None
+    rootfs: str | None = None
 
     _bwrap_argv: list[str] = field(init=False, default_factory=list)
 
     def __post_init__(self):
+        if self.rootfs is not None:
+            self.rootfs = expandvars(self.rootfs)
+            self._bwrap_argv.extend(["--dev-bind", self.rootfs, "/"])
+        self._bwrap_argv.extend(["--proc", "/proc", "--dev", "/dev"])
         # allow use string as cmd
-        self._bwrap_argv = ["--proc", "/proc", "--dev", "/dev"]
         if isinstance(self.cmd, str):
             self.cmd = [self.cmd]
         if isinstance(self.share, list):
@@ -62,10 +66,11 @@ class Bwrap:
         self.home = other.home or self.home
         self.chdir = other.chdir or self.chdir
         self.desc = other.desc
+        self.rootfs = other.rootfs
         return self
 
     def resolve(self, presets: dict[str, Self]):
-        resolved = Bwrap().merge(presets["global"])
+        resolved = Bwrap(rootfs=self.rootfs).merge(presets["global"])
         if not self.use:
             return resolved.merge(self)
 
