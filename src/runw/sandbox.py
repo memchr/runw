@@ -49,7 +49,7 @@ class Bwrap:
             self.share = set(self.share)
 
     def merge(self, other: Self):
-        # merge
+        # extend
         self.cmd.extend(other.cmd)
         self.bind.extend(other.bind)
         self.dev.extend(other.dev)
@@ -70,11 +70,13 @@ class Bwrap:
         return self
 
     def resolve(self, presets: dict[str, Self]):
+        """Resolve and return a merged configuration by applying presets"""
         resolved = Bwrap(rootfs=self.rootfs).merge(presets["global"])
         if not self.use:
             return resolved.merge(self)
 
-        # DFS postorder DAG
+        # Merge each preset only after its dependencies have been merged.
+        # Depth-first postorder traversal of DAG
         stack: list[str] = list(reversed(self.use))
         visited: set[str] = set()
         processed: set[str] = set()
