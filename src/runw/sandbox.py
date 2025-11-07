@@ -108,6 +108,7 @@ class Bwrap:
             self._bwrap_argv.append("--die-with-parent")
 
         # update environment
+        os.environ["RUNW"] = "1"
         for k, e in self.env.items():
             os.environ[k] = expandvars(e)
         for e in self.unsetenv:
