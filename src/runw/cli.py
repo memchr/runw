@@ -45,6 +45,9 @@ class RunArgumentParser(argparse.ArgumentParser):
 
 def main():
     progname = os.path.basename(sys.argv[0])
+    if "RUNW" in os.environ:
+        print("Cowardly refusing to run inside runw")
+        raise SystemExit(1)
     if progname == "runw":
         runw()
     else:
